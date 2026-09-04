@@ -133,7 +133,7 @@ LIVE_DOM_SCRIPT = r"""() => {
 
 
 def normalize_live_observation(payload: dict[str, Any]) -> dict[str, Any]:
-    """Normalize page.evaluate output into the shared browser-state shape."""
+    """Normalize the decoded browser payload into the shared state shape."""
     elements = []
     for raw in payload.get("elements", []):
         elements.append(
@@ -231,12 +231,14 @@ def _decode_evaluate_result(result: Any) -> dict[str, Any]:
     raise RuntimeError("Browser returned an invalid DOM observation payload")
 
 
-async def observe_current_page(browser_session: Any) -> dict[str, Any]:
-    """Observe the currently focused page in an existing BrowserSession."""
-    page = await browser_session.get_current_page()
-    if page is None:
+async def observe_current_page(browser_session: Any, page: Any | None = None) -> dict[str, Any]:
+    """Observe an explicit live Page, falling back to the focused page."""
+    target_page = page
+    if target_page is None:
+        target_page = await browser_session.get_current_page()
+    if target_page is None:
         raise RuntimeError("No active browser page is available")
 
-    raw_result = await page.evaluate(LIVE_DOM_SCRIPT)
+    raw_result = await target_page.evaluate(LIVE_DOM_SCRIPT)
     payload = _decode_evaluate_result(raw_result)
     return normalize_live_observation(payload)
