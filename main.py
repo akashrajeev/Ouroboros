@@ -1,29 +1,52 @@
 import asyncio
 import os
 import sys
+from contextlib import suppress
 from datetime import datetime
 
 from dotenv import load_dotenv
 from browser_use import Agent, ChatOpenAI
 
 
-BANNER = r'''
-  ██████╗ ██╗   ██╗██████╗  ██████╗ ██████╗  ██████╗ ██████╗  ██████╗ ███████╗
- ██╔═══██╗██║   ██║██╔══██╗██╔═══██╗██╔══██╗██╔══██╗██╔══██╗██╔══██╗██╔════╝
- ██║   ██║██║   ██║██████╔╝██║   ██║██████╔╝██████╔╝██████╔╝██████╔╝███████╗
- ██║   ██║██║   ██║██╔══██╗██║   ██║██╔══██╗██╔═══╝ ██╔══██╗██╔══██╗╚════██║
- ╚██████╔╝╚██████╔╝██║  ██║╚██████╔╝██║  ██║██║     ██║  ██║██║  ██║███████║
-  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
-'''
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+CYAN = "\033[36m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+MAGENTA = "\033[35m"
+BLUE = "\033[34m"
 
-TAGLINE = "Privacy-first browser agent"
+BANNER = r"""
+   ___  _   _ ____   ___  ____   ____   ___  ____   ___  ____
+  / _ \| | | |  _ \ / _ \|  _ \ / ___| / _ \|  _ \ / _ \|  _ \
+ | | | | | | | |_) | | | | |_) | |  _ | | | | | |_) | | | | | | |
+ | |_| | |_| |  _ <| |_| |  _ <| |_| || |_| |  _ <| |_| | |_| |
+  \___/ \___/|_| \_\\___/|_| \_\\____| \___/|_| \_\\___/|____/
+"""
+
+TAGLINE = "privacy-first browser agent"
+VERSION = "internal demo"
+SPINNER = "◐◓◑◒"
+
+
+def color(text: str, style: str) -> str:
+    if os.getenv("NO_COLOR") or not sys.stdout.isatty():
+        return text
+    return f"{style}{text}{RESET}"
+
+
+def print_rule(char="─", width=78) -> None:
+    print(color(char * width, DIM))
 
 
 def print_banner() -> None:
-    print(BANNER)
-    print(f"  {TAGLINE}")
-    print("  " + "─" * 72)
-    print("  Enter a browser task.  /help for commands  •  /status  •  /exit")
+    print(color(BANNER, CYAN))
+    print(f"  {color(TAGLINE, BOLD)}  {color('•', DIM)}  {color(VERSION, DIM)}")
+    print_rule()
+    print(f"  {color('READY', GREEN)}  Enter a browser task and press Enter.")
+    print(f"  {color('TIP', YELLOW)}    /help for commands  •  /status for config  •  /exit to quit")
     print()
 
 
@@ -37,51 +60,93 @@ def build_llm() -> ChatOpenAI:
 
 
 def print_help() -> None:
-    print("  Commands")
-    print("  /help    Show available commands")
-    print("  /status  Show model and endpoint configuration")
-    print("  /clear   Clear the terminal")
-    print("  /exit    Quit Ouroboros")
+    print()
+    print(f"  {color('COMMANDS', BOLD)}")
+    print(f"  {color('/help', CYAN):<22} Show available commands")
+    print(f"  {color('/status', CYAN):<22} Show model and endpoint configuration")
+    print(f"  {color('/clear', CYAN):<22} Clear the terminal and redraw Ouroboros")
+    print(f"  {color('/exit', CYAN):<22} Quit Ouroboros")
     print()
 
 
 def print_status() -> None:
     model = os.getenv("OUROBOROS_MODEL", "auto")
     base_url = os.getenv("OUROBOROS_BASE_URL", "http://127.0.0.1:31415/v1")
-    key_status = "configured" if os.getenv("FREELLMAPI_API_KEY") else "not set"
-    print("  ┌─ STATUS ────────────────────────────────────────────────────────────┐")
-    print(f"  │ Model:    {model:<58}│")
-    print(f"  │ Endpoint: {base_url:<58}│")
-    print(f"  │ API key:  {key_status:<58}│")
-    print("  └──────────────────────────────────────────────────────────────────────┘")
+    key_status = color("configured", GREEN) if os.getenv("FREELLMAPI_API_KEY") else color("not set", YELLOW)
     print()
+    print(f"  {color('SYSTEM STATUS', BOLD)}")
+    print_rule(width=64)
+    print(f"  {color('Model', DIM):<18} {model}")
+    print(f"  {color('Endpoint', DIM):<18} {base_url}")
+    print(f"  {color('API key', DIM):<18} {key_status}")
+    print(f"  {color('Agent', DIM):<18} {color('ready', GREEN)}")
+    print_rule(width=64)
+    print()
+
+
+def _compact_task(task: str, max_len: int = 68) -> str:
+    task = " ".join(task.split())
+    if len(task) <= max_len:
+        return task
+    return task[: max_len - 3] + "..."
+
+
+def print_task_header(task: str) -> None:
+    print()
+    print(f"  {color('TASK', BOLD)}")
+    print(f"  {color('›', MAGENTA)} {_compact_task(task)}")
+    print()
+
+
+async def _status_spinner(stop_event: asyncio.Event) -> None:
+    index = 0
+    while not stop_event.is_set():
+        frame = SPINNER[index % len(SPINNER)]
+        message = f"  {color(frame, CYAN)}  browser agent is working..."
+        print(f"\r{message}", end="", flush=True)
+        index += 1
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=0.14)
+        except asyncio.TimeoutError:
+            continue
+
+
+def _clear_status_line() -> None:
+    print("\r" + " " * 64 + "\r", end="", flush=True)
 
 
 async def run_task(llm: ChatOpenAI, task: str) -> None:
     started = datetime.now()
+    stop_event = asyncio.Event()
+    spinner_task = asyncio.create_task(_status_spinner(stop_event))
 
-    print()
-    print("  ┌─ TASK ──────────────────────────────────────────────────────────────┐")
-    print(f"  │ {task[:68]:<68} │")
-    print("  └──────────────────────────────────────────────────────────────────────┘")
-    print("  ◉ Browser agent running…")
+    print_task_header(task)
 
     try:
         agent = Agent(task=task, llm=llm)
         result = await agent.run()
     except Exception as exc:
-        print()
-        print("  ✖ Task failed")
-        print(f"    {type(exc).__name__}: {exc}")
+        stop_event.set()
+        with suppress(asyncio.CancelledError):
+            await spinner_task
+        _clear_status_line()
+        print(f"  {color('✖ FAILED', RED)}")
+        print(f"  {color(type(exc).__name__ + ':', DIM)} {exc}")
         print()
         return
+    finally:
+        stop_event.set()
+        with suppress(asyncio.CancelledError):
+            await spinner_task
+        _clear_status_line()
 
     elapsed = (datetime.now() - started).total_seconds()
+    print(f"  {color('✓ COMPLETED', GREEN)}  {color(f'{elapsed:.1f}s', BOLD)}")
     print()
-    print("  ┌─ RESULT ────────────────────────────────────────────────────────────┐")
-    print(f"  │ Completed in {elapsed:.1f}s{' ' * max(0, 56 - len(f'Completed in {elapsed:.1f}s'))}│")
-    print("  └──────────────────────────────────────────────────────────────────────┘")
+    print(f"  {color('RESULT', BOLD)}")
+    print_rule(width=64)
     print(result)
+    print_rule(width=64)
     print()
 
 
@@ -92,9 +157,10 @@ async def cli() -> None:
 
     while True:
         try:
-            task = input("  ouroboros › ").strip()
+            task = input(color("  ouroboros › ", MAGENTA)).strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n  Goodbye.")
+            print("\n")
+            print(f"  {color('Ouroboros shutting down.', DIM)}")
             return
 
         if not task:
@@ -102,7 +168,7 @@ async def cli() -> None:
 
         command = task.lower()
         if command in {"/exit", "/quit"}:
-            print("\n  Goodbye.")
+            print(f"\n  {color('Ouroboros shutting down.', DIM)}\n")
             return
         if command == "/help":
             print_help()
@@ -115,7 +181,7 @@ async def cli() -> None:
             print_banner()
             continue
         if task.startswith("/"):
-            print("  Unknown command. Use /help.\n")
+            print(f"  {color('Unknown command.', YELLOW)} Use /help.\n")
             continue
 
         await run_task(llm, task)
@@ -125,7 +191,7 @@ def main() -> None:
     try:
         asyncio.run(cli())
     except KeyboardInterrupt:
-        print("\n  Goodbye.")
+        print(f"\n  {color('Ouroboros shutting down.', DIM)}\n")
         sys.exit(0)
 
 
