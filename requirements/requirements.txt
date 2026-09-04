@@ -1,0 +1,5 @@
+# Ouroboros runtime dependencies
+# Python: 3.11+
+# Browser agent: Browser Use 0.13.10
+browser-use==0.13.10
+python-dotenv>=1.2,<2
