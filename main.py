@@ -3,9 +3,13 @@ import os
 import sys
 from contextlib import suppress
 from datetime import datetime
+from pathlib import Path
 
 from dotenv import load_dotenv
 from browser_use import Agent, ChatOpenAI
+from colorama import just_fix_windows_console
+
+from privacy.inspector import format_privacy_report, inspect_html_file
 
 
 RESET = "\033[0m"
@@ -43,7 +47,7 @@ def print_banner() -> None:
     print(f"  {color(TAGLINE, BOLD)}  {color('•', DIM)}  {color(VERSION, DIM)}")
     print_rule()
     print(f"  {color('READY', GREEN)}  Enter a browser task and press Enter.")
-    print(f"  {color('TIP', YELLOW)}    /help for commands  •  /status for config  •  /exit to quit")
+    print(f"  {color('TIP', YELLOW)}    /privacy for local PII scan  •  /help for commands  •  /exit")
     print()
 
 
@@ -59,10 +63,11 @@ def build_llm() -> ChatOpenAI:
 def print_help() -> None:
     print()
     print(f"  {color('COMMANDS', BOLD)}")
-    print(f"  {color('/help', CYAN):<22} Show available commands")
-    print(f"  {color('/status', CYAN):<22} Show model and endpoint configuration")
-    print(f"  {color('/clear', CYAN):<22} Clear the terminal and redraw Ouroboros")
-    print(f"  {color('/exit', CYAN):<22} Quit Ouroboros")
+    print(f"  {color('/privacy', CYAN):<24} Scan the local demo page and show sanitized state")
+    print(f"  {color('/help', CYAN):<24} Show available commands")
+    print(f"  {color('/status', CYAN):<24} Show model and endpoint configuration")
+    print(f"  {color('/clear', CYAN):<24} Clear the terminal and redraw Ouroboros")
+    print(f"  {color('/exit', CYAN):<24} Quit Ouroboros")
     print()
 
 
@@ -81,17 +86,19 @@ def print_status() -> None:
     print()
 
 
-def _compact_task(task: str, max_len: int = 68) -> str:
-    task = " ".join(task.split())
-    if len(task) <= max_len:
-        return task
-    return task[: max_len - 3] + "..."
+def print_privacy_demo() -> None:
+    demo_path = Path(__file__).resolve().parent / "demo" / "checkout.html"
+    if not demo_path.exists():
+        print(f"  {color('✖ Demo page not found:', RED)} {demo_path}")
+        print()
+        return
 
+    started = datetime.now()
+    report = inspect_html_file(demo_path)
+    elapsed_ms = (datetime.now() - started).total_seconds() * 1000
 
-def print_task_header(task: str) -> None:
-    print()
-    print(f"  {color('TASK', BOLD)}")
-    print(f"  {color('›', MAGENTA)} {_compact_task(task)}")
+    print(format_privacy_report(report))
+    print(f"  SCAN TIME            {elapsed_ms:.1f} ms")
     print()
 
 
@@ -110,6 +117,20 @@ async def _status_spinner(stop_event: asyncio.Event) -> None:
 
 def _clear_status_line() -> None:
     print("\r" + " " * 64 + "\r", end="", flush=True)
+
+
+def _compact_task(task: str, max_len: int = 68) -> str:
+    task = " ".join(task.split())
+    if len(task) <= max_len:
+        return task
+    return task[: max_len - 3] + "..."
+
+
+def print_task_header(task: str) -> None:
+    print()
+    print(f"  {color('TASK', BOLD)}")
+    print(f"  {color('›', MAGENTA)} {_compact_task(task)}")
+    print()
 
 
 async def run_task(llm: ChatOpenAI, task: str) -> None:
@@ -149,6 +170,7 @@ async def run_task(llm: ChatOpenAI, task: str) -> None:
 
 async def cli() -> None:
     load_dotenv()
+    just_fix_windows_console()
     print_banner()
     llm = build_llm()
 
@@ -172,6 +194,9 @@ async def cli() -> None:
             continue
         if command == "/status":
             print_status()
+            continue
+        if command == "/privacy":
+            print_privacy_demo()
             continue
         if command == "/clear":
             os.system("cls" if os.name == "nt" else "clear")
