@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ouroboros Privacy Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:32px; font-family:Inter,Arial,sans-serif; background:#0b1220; color:#e5e7eb; }
+    .shell { width:min(1100px,100%); display:grid; grid-template-columns:1.4fr .9fr; gap:22px; }
+    .card { background:#111827; border:1px solid #263244; border-radius:18px; padding:28px; box-shadow:0 20px 50px rgba(0,0,0,.25); }
+    .eyebrow { color:#22d3ee; font-size:12px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; margin-bottom:8px; }
+    h1 { margin:0 0 8px; font-size:30px; }
+    .subtitle { margin:0 0 24px; color:#94a3b8; line-height:1.5; }
+    .form { display:grid; gap:16px; }
+    label { display:grid; gap:7px; font-size:13px; color:#cbd5e1; }
+    input { width:100%; border:1px solid #334155; background:#0f172a; color:#f8fafc; border-radius:10px; padding:12px 14px; font-size:14px; outline:none; }
+    input:focus { border-color:#22d3ee; }
+    .summary { display:grid; gap:14px; }
+    .summary-row { display:flex; justify-content:space-between; gap:16px; padding-bottom:12px; border-bottom:1px solid #1f2937; color:#94a3b8; }
+    .summary-row strong { color:#f8fafc; }
+    .total { font-size:18px; color:white; margin-top:2px; }
+    button { margin-top:6px; border:0; border-radius:11px; padding:13px 16px; background:#22d3ee; color:#06202a; font-size:14px; font-weight:800; cursor:pointer; }
+    button:disabled { cursor:default; opacity:.7; }
+    .privacy { margin-top:20px; padding:14px; border-radius:12px; background:#0b1627; border:1px solid #1e3a4a; }
+    .privacy-title { color:#67e8f9; font-weight:700; font-size:13px; margin-bottom:8px; }
+    .privacy p { margin:0; color:#94a3b8; font-size:12px; line-height:1.5; }
+    .badge { display:inline-block; padding:4px 8px; border-radius:999px; font-size:11px; font-weight:700; background:#183329; color:#6ee7b7; margin-bottom:14px; }
+    @media (max-width:800px){ .shell{grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="card">
+      <div class="eyebrow">Ouroboros Demo</div>
+      <h1>Secure Checkout</h1>
+      <p class="subtitle">Synthetic customer data for demonstrating local sensitive-data detection.</p>
+      <span class="badge">TEST DATA ONLY</span>
+      <form class="form" id="checkout-form">
+        <label>Customer Name
+          <input id="customer-name" name="customer_name" autocomplete="name" value="Alex Morgan">
+        </label>
+        <label>Email
+          <input id="email" name="email" type="email" autocomplete="email" value="alex.morgan@example.test">
+        </label>
+        <label>Phone
+          <input id="phone" name="phone" type="tel" autocomplete="tel" value="+91 9876543210">
+        </label>
+        <label>Card Number
+          <input id="card" name="card_number" inputmode="numeric" autocomplete="cc-number" value="4111 1111 1111 1111">
+        </label>
+        <label>Password
+          <input id="password" name="password" type="password" autocomplete="current-password" value="DemoSecret123!">
+        </label>
+        <button id="place-order" type="submit">Place Test Order</button>
+      </form>
+      <div class="privacy">
+        <div class="privacy-title">Privacy test surface</div>
+        <p>The page intentionally contains synthetic PII and a password so Ouroboros can demonstrate detection and sanitization locally.</p>
+      </div>
+    </section>
+    <aside class="card">
+      <div class="eyebrow">Order</div>
+      <h1 style="font-size:24px;">Demo Product</h1>
+      <div class="summary">
+        <div class="summary-row"><span>Wireless Headphones</span><strong>₹4,999</strong></div>
+        <div class="summary-row"><span>Quantity</span><strong>1</strong></div>
+        <div class="summary-row"><span>Shipping</span><strong>Free</strong></div>
+        <div class="summary-row total"><span>Total</span><strong>₹4,999</strong></div>
+      </div>
+    </aside>
+  </main>
+  <script>
+    document.getElementById('checkout-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const button = document.getElementById('place-order');
+      button.textContent = 'Order Submitted ✓';
+      button.disabled = true;
+    });
+  </script>
+</body>
+</html>
