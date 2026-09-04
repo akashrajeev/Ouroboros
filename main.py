@@ -13,6 +13,7 @@ from colorama import just_fix_windows_console
 
 from privacy.browser_observer import observe_current_page, protect_live_observation
 from privacy.inspector import format_privacy_report, inspect_html_file
+from privacy.secure_agent import PrivacyBoundaryError, run_privacy_task
 
 
 RESET = "\033[0m"
@@ -51,6 +52,7 @@ def print_banner() -> None:
     print_rule()
     print(f"  {color('READY', GREEN)}  Enter a browser task and press Enter.")
     print(f"  {color('TIP', YELLOW)}    /demo opens the controlled checkout  •  /live scans the current page")
+    print(f"  {color('SECURE', GREEN)}  /secure <task> uses sanitized state for remote reasoning")
     print(f"  {color('HELP', DIM)}    /help for commands  •  /exit")
     print()
 
@@ -76,13 +78,14 @@ def build_browser_session() -> BrowserSession:
 def print_help() -> None:
     print()
     print(f"  {color('COMMANDS', BOLD)}")
-    print(f"  {color('/demo', CYAN):<24} Open the controlled Ouroboros checkout page")
-    print(f"  {color('/live', CYAN):<24} Inspect and sanitize the tracked live browser page")
-    print(f"  {color('/privacy', CYAN):<24} Scan the local demo HTML fixture")
-    print(f"  {color('/help', CYAN):<24} Show available commands")
-    print(f"  {color('/status', CYAN):<24} Show model and endpoint configuration")
-    print(f"  {color('/clear', CYAN):<24} Clear the terminal and redraw Ouroboros")
-    print(f"  {color('/exit', CYAN):<24} Quit Ouroboros")
+    print(f"  {color('/demo', CYAN):<30} Open the controlled Ouroboros checkout page")
+    print(f"  {color('/live', CYAN):<30} Inspect and sanitize the tracked live browser page")
+    print(f"  {color('/secure <task>', CYAN):<30} Send only sanitized state for reasoning; execute locally")
+    print(f"  {color('/privacy', CYAN):<30} Scan the local demo HTML fixture")
+    print(f"  {color('/help', CYAN):<30} Show available commands")
+    print(f"  {color('/status', CYAN):<30} Show model and endpoint configuration")
+    print(f"  {color('/clear', CYAN):<30} Clear the terminal and redraw Ouroboros")
+    print(f"  {color('/exit', CYAN):<30} Quit Ouroboros")
     print()
 
 
@@ -146,6 +149,23 @@ def print_live_privacy(protected: dict) -> None:
     print()
 
 
+def print_secure_result(result: dict) -> None:
+    protected = result["protected"]
+    action = result["action"]
+    print_live_privacy(protected)
+    print(f"  {color('SERVER ACTION', BOLD)}")
+    print_rule(width=64)
+    if action["action"] == "click":
+        print(f"  click → {action['target_id']}")
+    else:
+        print("  noop")
+    if result.get("model_reason"):
+        print(f"  {color('REASON', DIM)} {result['model_reason']}")
+    print_rule(width=64)
+    print(f"  {color('✓ LOCAL EXECUTION', GREEN)} action applied to the live page")
+    print()
+
+
 async def open_demo(browser_session: BrowserSession):
     demo_url = os.getenv("OUROBOROS_DEMO_URL", "http://127.0.0.1:8000/demo/checkout.html")
     try:
@@ -176,6 +196,48 @@ async def inspect_live_page(browser_session: BrowserSession, page=None) -> None:
     elapsed_ms = (time.perf_counter() - started) * 1000
     print_live_privacy(protected)
     print(f"  LIVE SCAN TIME       {elapsed_ms:.2f} ms")
+    print()
+
+
+async def run_secure_task(llm: ChatOpenAI, page, task: str) -> None:
+    if page is None:
+        print(f"  {color('✖ NO ACTIVE PAGE', RED)} Run /demo first.")
+        print()
+        return
+
+    started = time.perf_counter()
+    stop_event = asyncio.Event()
+    spinner_task = asyncio.create_task(_status_spinner(stop_event))
+    print_task_header(task)
+    try:
+        result = await run_privacy_task(llm, page, task)
+    except PrivacyBoundaryError as exc:
+        stop_event.set()
+        with suppress(asyncio.CancelledError):
+            await spinner_task
+        _clear_status_line()
+        print(f"  {color('✖ BLOCKED BY PRIVACY GATE', RED)}")
+        print(f"  {color(str(exc), DIM)}")
+        print()
+        return
+    except Exception as exc:
+        stop_event.set()
+        with suppress(asyncio.CancelledError):
+            await spinner_task
+        _clear_status_line()
+        print(f"  {color('✖ SECURE TASK FAILED', RED)}")
+        print(f"  {color(type(exc).__name__ + ':', DIM)} {exc}")
+        print()
+        return
+    finally:
+        stop_event.set()
+        with suppress(asyncio.CancelledError):
+            await spinner_task
+        _clear_status_line()
+
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    print_secure_result(result)
+    print(f"  SECURE TASK TIME      {elapsed_ms:.0f} ms")
     print()
 
 
@@ -285,6 +347,12 @@ async def cli() -> None:
                 page = await open_demo(browser_session)
                 if page is not None:
                     active_page = page
+                continue
+            if command.startswith("/secure"):
+                secure_task = task[len("/secure"):].strip()
+                if not secure_task:
+                    secure_task = "Place the test order"
+                await run_secure_task(llm, active_page, secure_task)
                 continue
             if command == "/clear":
                 os.system("cls" if os.name == "nt" else "clear")
