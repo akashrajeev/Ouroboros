@@ -213,7 +213,9 @@ async def run_privacy_task(llm: Any, page: Any, task: str) -> dict[str, Any]:
         raise PrivacyBoundaryError("Local leakage check failed; task blocked")
 
     prompt = build_safe_agent_prompt(task, protected["state"])
-    assert_no_raw_values(prompt, protected.get("rawSensitiveValues", ()))
+    raw_in_model_input = tuple(value for value in protected.get("rawSensitiveValues", ()) if value and value in prompt)
+    if raw_in_model_input:
+        raise PrivacyBoundaryError("Privacy boundary blocked an outgoing payload containing raw sensitive data")
 
     response = await invoke_safe_model(llm, prompt)
     plan = parse_action_plan(_response_text(response))
@@ -225,7 +227,7 @@ async def run_privacy_task(llm: Any, page: Any, task: str) -> dict[str, Any]:
         "protected": protected,
         "model_input": prompt,
         "model_input_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-        "model_input_raw_pii": 0,
+        "model_input_raw_pii": len(raw_in_model_input),
         "action": validated,
         "model_reason": plan.reason,
     }
