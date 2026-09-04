@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import time
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
@@ -93,12 +94,12 @@ def print_privacy_demo() -> None:
         print()
         return
 
-    started = datetime.now()
+    started = time.perf_counter()
     report = inspect_html_file(demo_path)
-    elapsed_ms = (datetime.now() - started).total_seconds() * 1000
+    elapsed_ms = (time.perf_counter() - started) * 1000
 
     print(format_privacy_report(report))
-    print(f"  SCAN TIME            {elapsed_ms:.1f} ms")
+    print(f"  SCAN TIME            {elapsed_ms:.2f} ms")
     print()
 
 
