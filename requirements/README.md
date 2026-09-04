@@ -7,7 +7,7 @@ This folder contains the runtime prerequisites for the current Ouroboros browser
 - Python 3.11 or newer.
 - A supported desktop browser. The current prototype is intended to run with Chromium/Chrome on the local machine; Firefox support is part of the planned privacy-extension architecture, not the current prototype path.
 - Internet access during installation so Python packages and the browser runtime can be installed.
-- A running OpenAI-compatible local LLM endpoint for the browser-agent path, unless you change `OUROBOROS_BASE_URL` and credentials to another provider.
+- A running OpenAI-compatible local LLM endpoint for the browser-agent and privacy-safe reasoning paths, unless you change `OUROBOROS_BASE_URL` and credentials to another provider.
 
 ## 2. Python environment
 
@@ -54,21 +54,32 @@ The CLI defaults to `auto`, `http://127.0.0.1:31415/v1`, and the local checkout 
 
 Do not commit `.env` or real API keys.
 
-## 5. Run Ouroboros
+## 5. Run and test Ouroboros
 
 From the repository root, with the virtual environment activated:
 
 ```bash
-python main.py
+python -m unittest discover -s tests -v
 ```
 
-Enter a natural-language browser task at the `ouroboros ›` prompt.
+Start the controlled demo server in one terminal:
+
+```bash
+python -m http.server 8000
+```
+
+Then start Ouroboros in a second terminal:
+
+```bash
+python main.py
+```
 
 Useful commands:
 
 ```text
 /demo
 /live
+/secure <task>
 /privacy
 /help
 /status
@@ -76,15 +87,11 @@ Useful commands:
 /exit
 ```
 
-`/demo` opens the controlled checkout page in the same persistent BrowserSession used by the agent. Start the demo server first:
+`/demo` opens the controlled checkout page in the same persistent `BrowserSession` used by the CLI. `/live` evaluates that exact live page locally, detects sensitive fields, sanitizes their values, and verifies that raw values do not survive in the agent-facing state.
 
-```bash
-python -m http.server 8000
-```
+`/secure <task>` is the internal privacy-preserving reasoning demo. It sends only the sanitized state to the OpenAI-compatible endpoint, expects a structured click/no-op decision, validates the decision locally, and executes the approved action on the live browser page. The current secure executor intentionally supports safe button clicks only; broader browser actions are a later stage.
 
-Then `/live` evaluates the current browser page locally, detects sensitive fields using the existing deterministic detectors, sanitizes the values with the privacy policy, and verifies that the original sensitive values do not survive in the agent-facing state.
-
-`/privacy` remains the static HTML fixture check. It is useful for regression testing; `/live` is the browser-integrated privacy path.
+`/privacy` remains the static HTML fixture check and is useful for regression testing. `/live` is the browser-integrated privacy path.
 
 ## 6. Dependency notes
 
