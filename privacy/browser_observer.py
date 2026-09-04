@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from .detectors import detect_field
+from .sanitizer import sanitize_elements
+
 
 LIVE_DOM_SCRIPT = r"""() => {
   const visible = (el) => {
@@ -158,6 +161,48 @@ def normalize_live_observation(payload: dict[str, Any]) -> dict[str, Any]:
         "viewport": payload.get("viewport", {}),
         "elements": elements,
         "screenshot": None,
+    }
+
+
+def protect_live_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    """Detect and sanitize a live observation before it can leave the local process."""
+    elements = observation.get("elements", [])
+    detections = []
+    raw_sensitive_values: list[str] = []
+    annotated: list[dict[str, Any]] = []
+
+    for source in elements:
+        element = dict(source)
+        field_detections = detect_field(
+            target_id=element["id"],
+            field_name=element.get("nameAttribute", ""),
+            field_type=element.get("type", ""),
+            autocomplete=element.get("autocomplete", ""),
+            value=element.get("value", ""),
+            label=element.get("name", ""),
+        )
+        detections.extend(field_detections)
+        if field_detections and element.get("value"):
+            raw_sensitive_values.append(element["value"])
+
+        element["detectedTypes"] = sorted({item.kind for item in field_detections})
+        annotated.append(element)
+
+    result = sanitize_elements(annotated, raw_sensitive_values)
+    safe_state = {
+        "page": dict(observation.get("page", {})),
+        "viewport": dict(observation.get("viewport", {})),
+        "elements": result.state["elements"],
+        "screenshot": None,
+    }
+
+    return {
+        "state": safe_state,
+        "detections": detections,
+        "detectionCount": len({item.target_id for item in detections}),
+        "redactedCount": result.redacted_count,
+        "leakageCheck": "PASS" if result.passed else "FAIL",
+        "leakedValueCount": len(result.leaked_values),
     }
 
 
