@@ -3,3 +3,4 @@
 # Browser agent: Browser Use 0.13.10
 browser-use==0.13.10
 python-dotenv>=1.2,<2
+colorama>=0.4.6,<1
