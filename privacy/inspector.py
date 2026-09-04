@@ -1,8 +1,8 @@
 """Local HTML privacy inspector used by the Ouroboros demo CLI.
 
 It parses form controls from a local HTML snapshot, applies deterministic
-sensitive-data detection, and builds the sanitized agent-facing state without
-mutating the source page.
+sensitive-data detection, and passes the result through the shared fail-closed
+sanitization policy used by future live browser adapters.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .detectors import SensitiveDetection, detect_field
+from .sanitizer import sanitize_elements
 
 
 class _FormParser(HTMLParser):
@@ -34,8 +35,7 @@ class _FormParser(HTMLParser):
         if tag != "input":
             return
 
-        # <input> is a void element; HTMLParser does not emit an end-tag event
-        # for it. Finalize the field immediately from the current label context.
+        # <input> is a void element; HTMLParser does not emit an end-tag event.
         element_id = attrs_dict.get("id") or f"input-{len(self.fields) + 1}"
         label = " ".join((self._active_label or "").split())
         self.fields.append(
@@ -60,22 +60,6 @@ class _FormParser(HTMLParser):
             self._active_label = None
 
 
-def _sanitize_value(value: str, detections: list[SensitiveDetection]) -> str:
-    if not detections or not value:
-        return value
-
-    # The highest-risk class wins when multiple detectors classify one field.
-    priority = {
-        "PASSWORD": 5,
-        "CARD_NUMBER": 4,
-        "EMAIL": 3,
-        "PHONE": 2,
-        "PERSON": 1,
-    }
-    strongest = max(detections, key=lambda item: priority.get(item.kind, 0))
-    return strongest.replacement
-
-
 def inspect_html_file(path: str | Path) -> dict[str, Any]:
     html_path = Path(path)
     parser = _FormParser()
@@ -83,7 +67,7 @@ def inspect_html_file(path: str | Path) -> dict[str, Any]:
     parser.close()
 
     detections: list[SensitiveDetection] = []
-    elements: list[dict[str, Any]] = []
+    raw_elements: list[dict[str, Any]] = []
     raw_sensitive_values: list[str] = []
 
     for field in parser.fields:
@@ -100,37 +84,40 @@ def inspect_html_file(path: str | Path) -> dict[str, Any]:
         if field_detections and field["value"]:
             raw_sensitive_values.append(field["value"])
 
-        elements.append(
+        raw_elements.append(
             {
                 "id": field["id"],
                 "role": "textbox",
                 "name": field["label"] or field["name"] or field["id"],
                 "type": field["type"],
-                "value": _sanitize_value(field["value"], field_detections),
+                "value": field["value"],
                 "redacted": bool(field_detections),
                 "detectedTypes": sorted({item.kind for item in field_detections}),
             }
         )
 
-    # One sensitive field is one redacted DOM target, even if multiple detector
-    # signals agree on it. Detector-level details remain available in `detections`.
-    sensitive_field_ids = {item.target_id for item in detections}
-
+    sanitization = sanitize_elements(raw_elements, raw_sensitive_values)
     safe_state = {
         "page": {"title": "Ouroboros Checkout Demo"},
-        "elements": elements,
+        "elements": sanitization.state["elements"],
         "screenshot": None,
     }
 
-    # Fail closed if an original detected value survives anywhere in the state.
+    # Re-check the complete outgoing state, including page metadata.
     serialized_safe_state = json.dumps(safe_state, ensure_ascii=False)
-    leaked_values = [value for value in raw_sensitive_values if value and value in serialized_safe_state]
+    leaked_values = tuple(
+        value for value in raw_sensitive_values
+        if value and value in serialized_safe_state
+    )
+
+    passed = sanitization.passed and not leaked_values
+    sensitive_field_ids = {item.target_id for item in detections}
 
     return {
         "source": str(html_path),
         "detectionCount": len(sensitive_field_ids),
-        "redactedCount": sum(1 for element in elements if element["redacted"]),
-        "leakageCheck": "PASS" if not leaked_values else "FAIL",
+        "redactedCount": sanitization.redacted_count,
+        "leakageCheck": "PASS" if passed else "FAIL",
         "leakedValueCount": len(leaked_values),
         "detections": [asdict(item) for item in detections],
         "state": safe_state,
