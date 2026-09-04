@@ -8,7 +8,6 @@ mutating the source page.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import asdict
 from html.parser import HTMLParser
 from pathlib import Path
@@ -18,45 +17,53 @@ from .detectors import SensitiveDetection, detect_field
 
 
 class _FormParser(HTMLParser):
+    """Extract input controls and their surrounding label text."""
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.fields: list[dict[str, str]] = []
-        self._labels: list[str] = []
         self._active_label: str | None = None
-        self._current_input: dict[str, str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attrs_dict = {key: value or "" for key, value in attrs}
+
         if tag == "label":
             self._active_label = ""
-        elif tag == "input":
-            element_id = attrs_dict.get("id") or f"input-{len(self.fields) + 1}"
-            self._current_input = {
+            return
+
+        if tag != "input":
+            return
+
+        # <input> is a void element; HTMLParser does not emit an end-tag event
+        # for it. Finalize the field immediately from the current label context.
+        element_id = attrs_dict.get("id") or f"input-{len(self.fields) + 1}"
+        label = " ".join((self._active_label or "").split())
+        self.fields.append(
+            {
                 "id": element_id,
                 "name": attrs_dict.get("name", ""),
                 "type": attrs_dict.get("type", "text"),
                 "autocomplete": attrs_dict.get("autocomplete", ""),
                 "value": attrs_dict.get("value", ""),
-                "label": "",
+                "label": label,
             }
+        )
 
     def handle_data(self, data: str) -> None:
         if self._active_label is not None:
-            self._active_label += " " + data.strip()
+            cleaned = data.strip()
+            if cleaned:
+                self._active_label = f"{self._active_label} {cleaned}".strip()
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "label":
             self._active_label = None
-        elif tag == "input" and self._current_input is not None:
-            label = self._active_label or ""
-            self._current_input["label"] = " ".join(label.split())
-            self.fields.append(self._current_input)
-            self._current_input = None
 
 
 def _sanitize_value(value: str, detections: list[SensitiveDetection]) -> str:
     if not detections or not value:
         return value
+
     # The highest-risk class wins when multiple detectors classify one field.
     priority = {
         "PASSWORD": 5,
@@ -73,6 +80,7 @@ def inspect_html_file(path: str | Path) -> dict[str, Any]:
     html_path = Path(path)
     parser = _FormParser()
     parser.feed(html_path.read_text(encoding="utf-8"))
+    parser.close()
 
     detections: list[SensitiveDetection] = []
     elements: list[dict[str, Any]] = []
@@ -117,10 +125,6 @@ def inspect_html_file(path: str | Path) -> dict[str, Any]:
 
 
 def format_privacy_report(report: dict[str, Any]) -> str:
-    detections_by_field: dict[str, list[str]] = {}
-    for item in report["detections"]:
-        detections_by_field.setdefault(item["target_id"], []).append(item["kind"])
-
     lines = [
         "",
         "  OUROBOROS  /  LOCAL PRIVACY INSPECTOR",
