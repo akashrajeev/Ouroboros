@@ -7,6 +7,7 @@ state before executing it on the real browser page.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import re
@@ -167,20 +168,35 @@ def validate_action(action: ActionPlan, safe_state: dict[str, Any]) -> dict[str,
 
 
 async def execute_validated_action(page: Any, action: dict[str, Any]) -> None:
-    """Execute a validated action on the real local page."""
+    """Execute a validated action directly on the live DOM and verify it."""
     if action["action"] == "noop":
         return
 
     target_id = action["target_id"]
-    elements = page.get_elements_by_css_selector(f"#{target_id}")
-    if inspect.isawaitable(elements):
-        elements = await elements
-    if not elements:
-        raise PrivacyBoundaryError(f"Validated target {target_id!r} was not found in the live page")
+    if not _SAFE_ID_RE.fullmatch(target_id):
+        raise PrivacyBoundaryError("Unsafe target identifier at execution boundary")
 
-    click_result = elements[0].click()
-    if inspect.isawaitable(click_result):
-        await click_result
+    script = (
+        "() => { "
+        f"const el = document.getElementById({json.dumps(target_id)}); "
+        "if (!el) return {found:false}; "
+        "if (!(el instanceof HTMLButtonElement)) return {found:true, button:false}; "
+        "el.click(); "
+        "return {found:true, button:true, text:(el.innerText || '').trim(), disabled:!!el.disabled}; "
+        "}"
+    )
+    result = page.evaluate(script)
+    if inspect.isawaitable(result):
+        result = await result
+
+    if not isinstance(result, dict) or not result.get("found"):
+        raise PrivacyBoundaryError(f"Validated target {target_id!r} was not found in the live DOM")
+    if not result.get("button"):
+        raise PrivacyBoundaryError(f"Validated target {target_id!r} is not a button in the live DOM")
+    if result.get("text") != "Test order placed" or result.get("disabled") is not True:
+        raise PrivacyBoundaryError(
+            f"Secure click post-condition failed for {target_id!r}: expected placed/disabled button state"
+        )
 
 
 async def invoke_safe_model(llm: Any, prompt: str) -> Any:
@@ -207,6 +223,9 @@ async def run_privacy_task(llm: Any, page: Any, task: str) -> dict[str, Any]:
     return {
         "task": task,
         "protected": protected,
+        "model_input": prompt,
+        "model_input_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "model_input_raw_pii": 0,
         "action": validated,
         "model_reason": plan.reason,
     }
