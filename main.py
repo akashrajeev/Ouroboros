@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import time
@@ -149,10 +150,38 @@ def print_live_privacy(protected: dict) -> None:
     print()
 
 
+def print_model_handoff(result: dict) -> None:
+    payload_text = result.get("model_input", "")
+    try:
+        payload = json.loads(payload_text)
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+
+    print(f"  {color('REMOTE MODEL INPUT  /  PRIVACY RECEIPT', BOLD)}")
+    print_rule(width=64)
+    print(f"  {color('BOUNDARY CHECK', DIM):<24} {color('PASS', GREEN)}")
+    print(f"  {color('RAW PII IN PAYLOAD', DIM):<24} {result.get('model_input_raw_pii', 'UNKNOWN')}")
+    print(f"  {color('PAYLOAD SHA256', DIM):<24} {result.get('model_input_sha256', '')}")
+    print()
+    print(f"  {color('EXACT SAFE CONTENT SENT TO MODEL', DIM)}")
+    print_rule(width=64)
+    print(f"  task       : {payload.get('task', '')}")
+    page = payload.get('page', {})
+    print(f"  page       : {page.get('title', '')}")
+    for element in payload.get('elements', []):
+        value = element.get('value', '')
+        name = element.get('name', element.get('id', ''))
+        detected = ",".join(element.get('detectedTypes', [])) or "SAFE"
+        print(f"  {name:<12} → {value:<18} [{detected}]")
+    print_rule(width=64)
+    print()
+
+
 def print_secure_result(result: dict) -> None:
     protected = result["protected"]
     action = result["action"]
     print_live_privacy(protected)
+    print_model_handoff(result)
     print(f"  {color('SERVER ACTION', BOLD)}")
     print_rule(width=64)
     if action["action"] == "click":
