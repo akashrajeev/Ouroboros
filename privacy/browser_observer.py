@@ -8,6 +8,7 @@ request.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .detectors import detect_field
@@ -206,14 +207,36 @@ def protect_live_observation(observation: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _decode_evaluate_result(result: Any) -> dict[str, Any]:
+    """Decode Browser Use page.evaluate output into a Python mapping.
+
+    Browser Use serializes JavaScript object results and returns them as JSON
+    strings. Accept a mapping too so the helper remains easy to unit-test and
+    tolerant of alternate browser adapters.
+    """
+    if isinstance(result, dict):
+        return result
+
+    if isinstance(result, (bytes, bytearray)):
+        result = result.decode("utf-8")
+
+    if isinstance(result, str):
+        try:
+            decoded = json.loads(result)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Browser returned invalid JSON from DOM observation") from exc
+        if isinstance(decoded, dict):
+            return decoded
+
+    raise RuntimeError("Browser returned an invalid DOM observation payload")
+
+
 async def observe_current_page(browser_session: Any) -> dict[str, Any]:
     """Observe the currently focused page in an existing BrowserSession."""
     page = await browser_session.get_current_page()
     if page is None:
         raise RuntimeError("No active browser page is available")
 
-    payload = await page.evaluate(LIVE_DOM_SCRIPT)
-    if not isinstance(payload, dict):
-        raise RuntimeError("Browser returned an invalid DOM observation payload")
-
+    raw_result = await page.evaluate(LIVE_DOM_SCRIPT)
+    payload = _decode_evaluate_result(raw_result)
     return normalize_live_observation(payload)
