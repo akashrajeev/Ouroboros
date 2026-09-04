@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from browser_use.llm.messages import UserMessage
+
 from .browser_observer import observe_current_page, protect_live_observation
 
 
@@ -32,11 +34,26 @@ class PrivacyBoundaryError(RuntimeError):
 
 
 def _response_text(response: Any) -> str:
+    """Extract model text from Browser Use chat completion responses."""
+    completion = getattr(response, "completion", None)
+    if isinstance(completion, str):
+        return completion
+    if completion is not None:
+        if isinstance(completion, list):
+            parts: list[str] = []
+            for item in completion:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+            return "".join(parts)
+        return str(completion)
+
     content = getattr(response, "content", response)
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: list[str] = []
+        parts = []
         for item in content:
             if isinstance(item, str):
                 parts.append(item)
@@ -166,6 +183,11 @@ async def execute_validated_action(page: Any, action: dict[str, Any]) -> None:
         await click_result
 
 
+async def invoke_safe_model(llm: Any, prompt: str) -> Any:
+    """Invoke Browser Use ChatOpenAI using its typed chat-message interface."""
+    return await llm.ainvoke([UserMessage(content=prompt)])
+
+
 async def run_privacy_task(llm: Any, page: Any, task: str) -> dict[str, Any]:
     """Observe → sanitize → reason on safe state → validate → execute."""
     observation = await observe_current_page(None, page=page)
@@ -177,7 +199,7 @@ async def run_privacy_task(llm: Any, page: Any, task: str) -> dict[str, Any]:
     prompt = build_safe_agent_prompt(task, protected["state"])
     assert_no_raw_values(prompt, protected.get("rawSensitiveValues", ()))
 
-    response = await llm.ainvoke(prompt)
+    response = await invoke_safe_model(llm, prompt)
     plan = parse_action_plan(_response_text(response))
     validated = validate_action(plan, protected["state"])
     await execute_validated_action(page, validated)
