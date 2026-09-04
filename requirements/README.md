@@ -47,9 +47,10 @@ Create a `.env` file at the repository root:
 OUROBOROS_MODEL=auto
 OUROBOROS_BASE_URL=http://127.0.0.1:31415/v1
 FREELLMAPI_API_KEY=your-local-api-key
+OUROBOROS_DEMO_URL=http://127.0.0.1:8000/demo/checkout.html
 ```
 
-The CLI defaults to `auto` and `http://127.0.0.1:31415/v1` when those values are omitted.
+The CLI defaults to `auto`, `http://127.0.0.1:31415/v1`, and the local checkout URL when those values are omitted.
 
 Do not commit `.env` or real API keys.
 
@@ -66,6 +67,8 @@ Enter a natural-language browser task at the `ouroboros ›` prompt.
 Useful commands:
 
 ```text
+/demo
+/live
 /privacy
 /help
 /status
@@ -73,7 +76,15 @@ Useful commands:
 /exit
 ```
 
-`/privacy` runs the local deterministic inspector against `demo/checkout.html` and prints the sanitized agent-facing state. This is the current demo/privacy slice; the full browser extension, local vision inference, image redaction, and state bridge are the next implementation stages.
+`/demo` opens the controlled checkout page in the same persistent BrowserSession used by the agent. Start the demo server first:
+
+```bash
+python -m http.server 8000
+```
+
+Then `/live` evaluates the current browser page locally, detects sensitive fields using the existing deterministic detectors, sanitizes the values with the privacy policy, and verifies that the original sensitive values do not survive in the agent-facing state.
+
+`/privacy` remains the static HTML fixture check. It is useful for regression testing; `/live` is the browser-integrated privacy path.
 
 ## 6. Dependency notes
 
