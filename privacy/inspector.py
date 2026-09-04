@@ -112,8 +112,9 @@ def inspect_html_file(path: str | Path) -> dict[str, Any]:
             }
         )
 
-    # Deduplicate multiple detector signals for the same field/class for demo metrics.
-    unique_pairs = {(item.target_id, item.kind) for item in detections}
+    # One sensitive field is one redacted DOM target, even if multiple detector
+    # signals agree on it. Detector-level details remain available in `detections`.
+    sensitive_field_ids = {item.target_id for item in detections}
 
     safe_state = {
         "page": {"title": "Ouroboros Checkout Demo"},
@@ -127,7 +128,7 @@ def inspect_html_file(path: str | Path) -> dict[str, Any]:
 
     return {
         "source": str(html_path),
-        "detectionCount": len(unique_pairs),
+        "detectionCount": len(sensitive_field_ids),
         "redactedCount": sum(1 for element in elements if element["redacted"]),
         "leakageCheck": "PASS" if not leaked_values else "FAIL",
         "leakedValueCount": len(leaked_values),
