@@ -1,13 +1,13 @@
 """Privacy-first action planner for the Ouroboros internal demo.
 
-This is a deliberately small bridge between the local privacy boundary and the
-remote reasoning model. The model receives only sanitized browser state and
-returns a structured action. The local process validates that action against
-the sanitized state before executing it on the real page.
+The remote model receives only sanitized browser state and returns a structured
+click/no-op command. The local process validates that command against the safe
+state before executing it on the real browser page.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from dataclasses import dataclass
@@ -78,9 +78,7 @@ def parse_action_plan(text: str) -> ActionPlan:
     if action not in _ALLOWED_ACTIONS:
         raise PrivacyBoundaryError(f"Unsupported action: {action or '<empty>'}")
     if target_id is not None:
-        target_id = str(target_id).strip()
-        if not target_id:
-            target_id = None
+        target_id = str(target_id).strip() or None
 
     if action == "click" and target_id is None:
         raise PrivacyBoundaryError("Click action is missing target_id")
@@ -157,10 +155,15 @@ async def execute_validated_action(page: Any, action: dict[str, Any]) -> None:
         return
 
     target_id = action["target_id"]
-    elements = await page.get_elements_by_css_selector(f"#{target_id}")
+    elements = page.get_elements_by_css_selector(f"#{target_id}")
+    if inspect.isawaitable(elements):
+        elements = await elements
     if not elements:
         raise PrivacyBoundaryError(f"Validated target {target_id!r} was not found in the live page")
-    await elements[0].click()
+
+    click_result = elements[0].click()
+    if inspect.isawaitable(click_result):
+        await click_result
 
 
 async def run_privacy_task(llm: Any, page: Any, task: str) -> dict[str, Any]:
