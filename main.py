@@ -8,8 +8,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from browser_use import Agent, ChatOpenAI
+from browser_use.browser import BrowserProfile, BrowserSession
 from colorama import just_fix_windows_console
 
+from privacy.browser_observer import observe_current_page, protect_live_observation
 from privacy.inspector import format_privacy_report, inspect_html_file
 
 
@@ -48,7 +50,8 @@ def print_banner() -> None:
     print(f"  {color(TAGLINE, BOLD)}  {color('•', DIM)}  {color(VERSION, DIM)}")
     print_rule()
     print(f"  {color('READY', GREEN)}  Enter a browser task and press Enter.")
-    print(f"  {color('TIP', YELLOW)}    /privacy for local PII scan  •  /help for commands  •  /exit")
+    print(f"  {color('TIP', YELLOW)}    /demo opens the controlled checkout  •  /live scans the current page")
+    print(f"  {color('HELP', DIM)}    /help for commands  •  /exit")
     print()
 
 
@@ -61,10 +64,21 @@ def build_llm() -> ChatOpenAI:
     )
 
 
+def build_browser_session() -> BrowserSession:
+    return BrowserSession(
+        browser_profile=BrowserProfile(
+            keep_alive=True,
+            headless=False,
+        )
+    )
+
+
 def print_help() -> None:
     print()
     print(f"  {color('COMMANDS', BOLD)}")
-    print(f"  {color('/privacy', CYAN):<24} Scan the local demo page and show sanitized state")
+    print(f"  {color('/demo', CYAN):<24} Open the controlled Ouroboros checkout page")
+    print(f"  {color('/live', CYAN):<24} Inspect and sanitize the current live browser page")
+    print(f"  {color('/privacy', CYAN):<24} Scan the local demo HTML fixture")
     print(f"  {color('/help', CYAN):<24} Show available commands")
     print(f"  {color('/status', CYAN):<24} Show model and endpoint configuration")
     print(f"  {color('/clear', CYAN):<24} Clear the terminal and redraw Ouroboros")
@@ -103,6 +117,66 @@ def print_privacy_demo() -> None:
     print()
 
 
+def print_live_privacy(protected: dict) -> None:
+    state = protected["state"]
+    page = state.get("page", {})
+
+    print()
+    print(f"  {color('OUROBOROS  /  LIVE PRIVACY GATE', BOLD)}")
+    print_rule(width=64)
+    print(f"  {color('URL', DIM):<18} {page.get('url', '')}")
+    print(f"  {color('PAGE', DIM):<18} {page.get('title', '')}")
+    print(f"  {color('SENSITIVE FIELDS', DIM):<18} {protected['detectionCount']}")
+    print(f"  {color('FIELDS REDACTED', DIM):<18} {protected['redactedCount']}")
+    print(f"  {color('LEAKAGE CHECK', DIM):<18} {protected['leakageCheck']}")
+    print()
+    print(f"  {color('SANITIZED AGENT STATE', BOLD)}")
+    print_rule(width=64)
+
+    for element in state.get("elements", []):
+        kinds = ", ".join(element.get("detectedTypes", [])) or "SAFE"
+        value = element.get("value", "") or ""
+        label = element.get("name", element.get("id", ""))
+        if len(label) > 20:
+            label = label[:17] + "..."
+        print(f"  {label:<20} → {value:<20} [{kinds}]")
+
+    print_rule(width=64)
+    print(f"  {color('RAW PII TRANSMITTED', DIM):<24} {0 if protected['leakageCheck'] == 'PASS' else 'BLOCKED'}")
+    print()
+
+
+async def open_demo(browser_session: BrowserSession) -> None:
+    demo_url = os.getenv("OUROBOROS_DEMO_URL", "http://127.0.0.1:8000/demo/checkout.html")
+    try:
+        await browser_session.start()
+        await browser_session.new_page(demo_url)
+        print(f"  {color('✓ DEMO OPENED', GREEN)}  {demo_url}")
+        print()
+    except Exception as exc:
+        print(f"  {color('✖ DEMO OPEN FAILED', RED)}")
+        print(f"  {color(type(exc).__name__ + ':', DIM)} {exc}")
+        print(f"  {color('TIP', YELLOW)} Start the demo server with: python -m http.server 8000")
+        print()
+
+
+async def inspect_live_page(browser_session: BrowserSession) -> None:
+    started = time.perf_counter()
+    try:
+        observation = await observe_current_page(browser_session)
+        protected = protect_live_observation(observation)
+    except Exception as exc:
+        print(f"\n  {color('✖ LIVE SCAN FAILED', RED)}")
+        print(f"  {color(type(exc).__name__ + ':', DIM)} {exc}")
+        print("  ")
+        return
+
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    print_live_privacy(protected)
+    print(f"  LIVE SCAN TIME       {elapsed_ms:.2f} ms")
+    print()
+
+
 async def _status_spinner(stop_event: asyncio.Event) -> None:
     index = 0
     while not stop_event.is_set():
@@ -134,7 +208,7 @@ def print_task_header(task: str) -> None:
     print()
 
 
-async def run_task(llm: ChatOpenAI, task: str) -> None:
+async def run_task(llm: ChatOpenAI, browser_session: BrowserSession, task: str) -> None:
     started = datetime.now()
     stop_event = asyncio.Event()
     spinner_task = asyncio.create_task(_status_spinner(stop_event))
@@ -142,7 +216,7 @@ async def run_task(llm: ChatOpenAI, task: str) -> None:
     print_task_header(task)
 
     try:
-        agent = Agent(task=task, llm=llm)
+        agent = Agent(task=task, llm=llm, browser_session=browser_session)
         result = await agent.run()
     except Exception as exc:
         stop_event.set()
@@ -174,40 +248,51 @@ async def cli() -> None:
     just_fix_windows_console()
     print_banner()
     llm = build_llm()
+    browser_session = build_browser_session()
 
-    while True:
-        try:
-            task = input(color("  ouroboros › ", MAGENTA)).strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n")
-            print(f"  {color('Ouroboros shutting down.', DIM)}")
-            return
+    try:
+        while True:
+            try:
+                task = input(color("  ouroboros › ", MAGENTA)).strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n")
+                print(f"  {color('Ouroboros shutting down.', DIM)}")
+                return
 
-        if not task:
-            continue
+            if not task:
+                continue
 
-        command = task.lower()
-        if command in {"/exit", "/quit"}:
-            print(f"\n  {color('Ouroboros shutting down.', DIM)}\n")
-            return
-        if command == "/help":
-            print_help()
-            continue
-        if command == "/status":
-            print_status()
-            continue
-        if command == "/privacy":
-            print_privacy_demo()
-            continue
-        if command == "/clear":
-            os.system("cls" if os.name == "nt" else "clear")
-            print_banner()
-            continue
-        if task.startswith("/"):
-            print(f"  {color('Unknown command.', YELLOW)} Use /help.\n")
-            continue
+            command = task.lower()
+            if command in {"/exit", "/quit"}:
+                print(f"\n  {color('Ouroboros shutting down.', DIM)}\n")
+                return
+            if command == "/help":
+                print_help()
+                continue
+            if command == "/status":
+                print_status()
+                continue
+            if command == "/privacy":
+                print_privacy_demo()
+                continue
+            if command == "/live":
+                await inspect_live_page(browser_session)
+                continue
+            if command == "/demo":
+                await open_demo(browser_session)
+                continue
+            if command == "/clear":
+                os.system("cls" if os.name == "nt" else "clear")
+                print_banner()
+                continue
+            if task.startswith("/"):
+                print(f"  {color('Unknown command.', YELLOW)} Use /help.\n")
+                continue
 
-        await run_task(llm, task)
+            await run_task(llm, browser_session, task)
+    finally:
+        with suppress(Exception):
+            await browser_session.kill()
 
 
 def main() -> None:
