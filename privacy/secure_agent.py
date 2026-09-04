@@ -1,8 +1,8 @@
 """Privacy-first action planner for the Ouroboros internal demo.
 
 The remote model receives only sanitized browser state and returns a structured
-click/no-op command. The local process validates that command against the safe
-state before executing it on the real browser page.
+click/fill-local/no-op command. Local execution performs protected-field writes
+without sending the local value to the remote model.
 """
 
 from __future__ import annotations
@@ -26,8 +26,18 @@ class ActionPlan:
     reason: str
 
 
-_ALLOWED_ACTIONS = {"click", "noop"}
+_ALLOWED_ACTIONS = {"click", "fill_local", "noop"}
 _SAFE_ID_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+_LOCAL_FILL_PATTERNS = (
+    re.compile(
+        r"^\s*(?:change|set|update|edit|replace)\s+(?:the\s+)?(?P<field>.+?)\s+(?:to|as)\s+(?P<value>.+?)\s*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*fill\s+(?:the\s+)?(?P<field>.+?)\s+with\s+(?P<value>.+?)\s*$",
+        re.IGNORECASE,
+    ),
+)
 
 
 class PrivacyBoundaryError(RuntimeError):
@@ -54,7 +64,7 @@ def _response_text(response: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = []
+        parts: list[str] = []
         for item in content:
             if isinstance(item, str):
                 parts.append(item)
@@ -98,10 +108,30 @@ def parse_action_plan(text: str) -> ActionPlan:
     if target_id is not None:
         target_id = str(target_id).strip() or None
 
-    if action == "click" and target_id is None:
-        raise PrivacyBoundaryError("Click action is missing target_id")
+    if action in {"click", "fill_local"} and target_id is None:
+        raise PrivacyBoundaryError(f"{action} action is missing target_id")
 
     return ActionPlan(action=action, target_id=target_id, reason=reason)
+
+
+def prepare_task_for_model(task: str) -> tuple[str, str | None]:
+    """Strip a locally-held fill value from a common fill task before remote reasoning."""
+    for pattern in _LOCAL_FILL_PATTERNS:
+        match = pattern.match(task)
+        if match:
+            field = " ".join(match.group("field").split())
+            local_value = match.group("value").strip()
+            if not field or not local_value:
+                break
+            model_task = (
+                f"Update the '{field}' field using a value supplied locally by the user. "
+                "Identify the correct field from the privacy-safe page state. "
+                "Do not request, reproduce, infer, or echo the locally-held value. "
+                "Return a fill_local action for the target element."
+            )
+            return model_task, local_value
+
+    return task, None
 
 
 def build_safe_agent_prompt(task: str, safe_state: dict[str, Any]) -> str:
@@ -127,8 +157,10 @@ def build_safe_agent_prompt(task: str, safe_state: dict[str, Any]) -> str:
         "elements": compact_elements,
         "rules": [
             "This is a privacy-safe browser state. Never ask for or infer the original sensitive values.",
-            "Only return a click on a visible, enabled element with no detectedTypes, or noop.",
-            "Return JSON only: {\"action\":\"click|noop\",\"target_id\":\"...\",\"reason\":\"...\"}.",
+            "For locally supplied values, choose the target only; the value is unavailable to you and remains local.",
+            "For click, only choose a visible, enabled element with no detectedTypes.",
+            "For fill_local, choose the visible, enabled textbox that matches the task; the local client performs the write.",
+            "Return JSON only: {\"action\":\"click|fill_local|noop\",\"target_id\":\"...\",\"reason\":\"...\"}.",
         ],
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -146,7 +178,7 @@ def validate_action(action: ActionPlan, safe_state: dict[str, Any]) -> dict[str,
     if action.action == "noop":
         return {"action": "noop"}
 
-    if action.action != "click" or not action.target_id:
+    if action.action not in {"click", "fill_local"} or not action.target_id:
         raise PrivacyBoundaryError("Invalid action")
     if not _SAFE_ID_RE.fullmatch(action.target_id):
         raise PrivacyBoundaryError("Unsafe target identifier")
@@ -157,14 +189,20 @@ def validate_action(action: ActionPlan, safe_state: dict[str, Any]) -> dict[str,
     )
     if element is None:
         raise PrivacyBoundaryError(f"Target {action.target_id!r} is not present in sanitized state")
-    if element.get("detectedTypes"):
-        raise PrivacyBoundaryError(f"Target {action.target_id!r} is sensitive and cannot be directly acted on")
     if not element.get("visible") or not element.get("enabled"):
         raise PrivacyBoundaryError(f"Target {action.target_id!r} is not visible and enabled")
-    if element.get("role") != "button":
-        raise PrivacyBoundaryError("Demo secure executor currently permits button clicks only")
 
-    return {"action": "click", "target_id": action.target_id}
+    detected_types = element.get("detectedTypes") or []
+    if action.action == "click":
+        if detected_types:
+            raise PrivacyBoundaryError(f"Target {action.target_id!r} is sensitive and cannot be directly acted on")
+        if element.get("role") != "button":
+            raise PrivacyBoundaryError("Demo secure executor permits button clicks only")
+        return {"action": "click", "target_id": action.target_id}
+
+    if element.get("role") != "textbox":
+        raise PrivacyBoundaryError("Local fill is limited to textbox elements")
+    return {"action": "fill_local", "target_id": action.target_id}
 
 
 def _decode_page_result(result: Any) -> dict[str, Any]:
@@ -183,8 +221,8 @@ def _decode_page_result(result: Any) -> dict[str, Any]:
     raise PrivacyBoundaryError("Browser returned an invalid action execution result")
 
 
-async def execute_validated_action(page: Any, action: dict[str, Any]) -> None:
-    """Execute a validated action directly on the live DOM and verify it."""
+async def execute_validated_action(page: Any, action: dict[str, Any], local_value: str | None = None) -> None:
+    """Execute a validated action directly on the local DOM and verify it."""
     if action["action"] == "noop":
         return
 
@@ -192,13 +230,48 @@ async def execute_validated_action(page: Any, action: dict[str, Any]) -> None:
     if not _SAFE_ID_RE.fullmatch(target_id):
         raise PrivacyBoundaryError("Unsafe target identifier at execution boundary")
 
+    if action["action"] == "click":
+        script = (
+            "() => { "
+            f"const el = document.getElementById({json.dumps(target_id)}); "
+            "if (!el) return {found:false}; "
+            "if (!(el instanceof HTMLButtonElement)) return {found:true, button:false}; "
+            "el.click(); "
+            "return {found:true, button:true, text:(el.innerText || '').trim(), disabled:!!el.disabled}; "
+            "}"
+        )
+        result = page.evaluate(script)
+        if inspect.isawaitable(result):
+            result = await result
+        result = _decode_page_result(result)
+
+        if not result.get("found"):
+            raise PrivacyBoundaryError(f"Validated target {target_id!r} was not found in the live DOM")
+        if not result.get("button"):
+            raise PrivacyBoundaryError(f"Validated target {target_id!r} is not a button in the live DOM")
+        if result.get("text") != "Test order placed" or result.get("disabled") is not True:
+            raise PrivacyBoundaryError(
+                f"Secure click post-condition failed for {target_id!r}: expected placed/disabled button state"
+            )
+        return
+
+    if action["action"] != "fill_local":
+        raise PrivacyBoundaryError("Unsupported execution action")
+    if local_value is None:
+        raise PrivacyBoundaryError("Local fill action requires a locally-held value")
+
+    value_json = json.dumps(local_value, ensure_ascii=False)
     script = (
         "() => { "
         f"const el = document.getElementById({json.dumps(target_id)}); "
         "if (!el) return {found:false}; "
-        "if (!(el instanceof HTMLButtonElement)) return {found:true, button:false}; "
-        "el.click(); "
-        "return {found:true, button:true, text:(el.innerText || '').trim(), disabled:!!el.disabled}; "
+        "if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLTextAreaElement)) return {found:true,textbox:false}; "
+        f"const value = {value_json}; "
+        "const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set; "
+        "if (setter) setter.call(el, value); else el.value = value; "
+        "el.dispatchEvent(new Event('input', {bubbles:true})); "
+        "el.dispatchEvent(new Event('change', {bubbles:true})); "
+        "return {found:true,textbox:true,ok:el.value === value}; "
         "}"
     )
     result = page.evaluate(script)
@@ -208,12 +281,10 @@ async def execute_validated_action(page: Any, action: dict[str, Any]) -> None:
 
     if not result.get("found"):
         raise PrivacyBoundaryError(f"Validated target {target_id!r} was not found in the live DOM")
-    if not result.get("button"):
-        raise PrivacyBoundaryError(f"Validated target {target_id!r} is not a button in the live DOM")
-    if result.get("text") != "Test order placed" or result.get("disabled") is not True:
-        raise PrivacyBoundaryError(
-            f"Secure click post-condition failed for {target_id!r}: expected placed/disabled button state"
-        )
+    if not result.get("textbox"):
+        raise PrivacyBoundaryError(f"Validated target {target_id!r} is not a textbox in the live DOM")
+    if result.get("ok") is not True:
+        raise PrivacyBoundaryError(f"Local fill post-condition failed for {target_id!r}")
 
 
 async def invoke_safe_model(llm: Any, prompt: str) -> Any:
@@ -229,22 +300,37 @@ async def run_privacy_task(llm: Any, page: Any, task: str) -> dict[str, Any]:
     if protected["leakageCheck"] != "PASS":
         raise PrivacyBoundaryError("Local leakage check failed; task blocked")
 
-    prompt = build_safe_agent_prompt(task, protected["state"])
-    raw_in_model_input = tuple(value for value in protected.get("rawSensitiveValues", ()) if value and value in prompt)
+    model_task, local_fill_value = prepare_task_for_model(task)
+    prompt = build_safe_agent_prompt(model_task, protected["state"])
+
+    raw_in_model_input = tuple(
+        value for value in protected.get("rawSensitiveValues", ()) if value and value in prompt
+    )
     if raw_in_model_input:
         raise PrivacyBoundaryError("Privacy boundary blocked an outgoing payload containing raw sensitive data")
+    if local_fill_value and local_fill_value in prompt:
+        raise PrivacyBoundaryError("Privacy boundary blocked the locally supplied fill value from leaving the client")
 
     response = await invoke_safe_model(llm, prompt)
     plan = parse_action_plan(_response_text(response))
     validated = validate_action(plan, protected["state"])
-    await execute_validated_action(page, validated)
+
+    if validated["action"] == "fill_local" and local_fill_value is None:
+        raise PrivacyBoundaryError(
+            "Model requested a local fill, but the task did not contain a locally-held value"
+        )
+
+    await execute_validated_action(page, validated, local_value=local_fill_value)
 
     return {
         "task": task,
+        "model_task": model_task,
         "protected": protected,
         "model_input": prompt,
         "model_input_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         "model_input_raw_pii": len(raw_in_model_input),
+        "model_input_local_value_exposed": bool(local_fill_value and local_fill_value in prompt),
+        "local_value_stayed_local": local_fill_value is not None and local_fill_value not in prompt,
         "action": validated,
         "model_reason": plan.reason,
     }
