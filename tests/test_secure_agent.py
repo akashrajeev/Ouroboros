@@ -8,6 +8,7 @@ from privacy.secure_agent import (
     PrivacyBoundaryError,
     assert_no_raw_values,
     build_safe_agent_prompt,
+    execute_validated_action,
     invoke_safe_model,
     parse_action_plan,
     validate_action,
@@ -22,6 +23,16 @@ class _FakeLLM:
     async def ainvoke(self, messages):
         self.messages = messages
         return SimpleNamespace(completion='{"action":"noop","target_id":null,"reason":"already complete"}')
+
+
+class _FakePage:
+    def __init__(self, result):
+        self.result = result
+        self.scripts = []
+
+    def evaluate(self, script):
+        self.scripts.append(script)
+        return self.result
 
 
 class SecureAgentTests(unittest.TestCase):
@@ -87,6 +98,23 @@ class SecureAgentTests(unittest.TestCase):
         self.assertEqual(len(fake_llm.messages), 1)
         self.assertIsInstance(fake_llm.messages[0], UserMessage)
         self.assertEqual(_response_text(result), '{"action":"noop","target_id":null,"reason":"already complete"}')
+
+    def test_secure_click_verifies_dom_post_condition(self) -> None:
+        page = _FakePage({"found": True, "button": True, "text": "Test order placed", "disabled": True})
+        action = {"action": "click", "target_id": "place-order"}
+
+        asyncio.run(execute_validated_action(page, action))
+
+        self.assertEqual(len(page.scripts), 1)
+        self.assertIn("document.getElementById", page.scripts[0])
+        self.assertIn("el.click()", page.scripts[0])
+
+    def test_secure_click_fails_closed_without_post_condition(self) -> None:
+        page = _FakePage({"found": True, "button": True, "text": "Place test order", "disabled": False})
+        action = {"action": "click", "target_id": "place-order"}
+
+        with self.assertRaises(PrivacyBoundaryError):
+            asyncio.run(execute_validated_action(page, action))
 
 
 if __name__ == "__main__":
