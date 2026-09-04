@@ -11,6 +11,7 @@ from privacy.secure_agent import (
     execute_validated_action,
     invoke_safe_model,
     parse_action_plan,
+    prepare_task_for_model,
     validate_action,
     _response_text,
 )
@@ -40,6 +41,15 @@ class SecureAgentTests(unittest.TestCase):
         self.safe_state = {
             "page": {"url": "http://127.0.0.1:8000/demo/checkout.html", "title": "Ouroboros — Checkout"},
             "elements": [
+                {
+                    "id": "customer-name",
+                    "role": "textbox",
+                    "name": "Full name",
+                    "value": "[PERSON]",
+                    "visible": True,
+                    "enabled": True,
+                    "detectedTypes": ["PERSON"],
+                },
                 {
                     "id": "email",
                     "role": "textbox",
@@ -78,10 +88,29 @@ class SecureAgentTests(unittest.TestCase):
         self.assertEqual(plan.action, "click")
         self.assertEqual(plan.target_id, "place-order")
 
+    def test_fill_local_action_parses(self) -> None:
+        plan = parse_action_plan(
+            '{"action":"fill_local","target_id":"customer-name","reason":"Use the local value."}'
+        )
+        self.assertEqual(plan.action, "fill_local")
+        self.assertEqual(plan.target_id, "customer-name")
+
+    def test_local_fill_task_hides_value_from_model_task(self) -> None:
+        model_task, local_value = prepare_task_for_model("change the name to akash")
+        self.assertEqual(local_value, "akash")
+        self.assertNotIn("akash", model_task.lower())
+        self.assertIn("name", model_task.lower())
+        self.assertIn("locally", model_task.lower())
+
     def test_sensitive_target_cannot_be_clicked(self) -> None:
         action = parse_action_plan('{"action":"click","target_id":"email","reason":""}')
         with self.assertRaises(PrivacyBoundaryError):
             validate_action(action, self.safe_state)
+
+    def test_sensitive_target_can_be_filled_locally(self) -> None:
+        action = parse_action_plan('{"action":"fill_local","target_id":"customer-name","reason":""}')
+        validated = validate_action(action, self.safe_state)
+        self.assertEqual(validated, {"action": "fill_local", "target_id": "customer-name"})
 
     def test_safe_button_is_valid(self) -> None:
         action = parse_action_plan('{"action":"click","target_id":"place-order","reason":"submit"}')
@@ -115,6 +144,17 @@ class SecureAgentTests(unittest.TestCase):
 
         with self.assertRaises(PrivacyBoundaryError):
             asyncio.run(execute_validated_action(page, action))
+
+    def test_local_fill_executes_value_without_remote_prompt(self) -> None:
+        value = "akash"
+        page = _FakePage('{"found":true,"textbox":true,"ok":true}')
+        action = {"action": "fill_local", "target_id": "customer-name"}
+
+        asyncio.run(execute_validated_action(page, action, local_value=value))
+
+        self.assertEqual(len(page.scripts), 1)
+        self.assertIn("customer-name", page.scripts[0])
+        self.assertIn('"akash"', page.scripts[0])
 
 
 if __name__ == "__main__":
