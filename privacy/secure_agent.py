@@ -167,6 +167,22 @@ def validate_action(action: ActionPlan, safe_state: dict[str, Any]) -> dict[str,
     return {"action": "click", "target_id": action.target_id}
 
 
+def _decode_page_result(result: Any) -> dict[str, Any]:
+    """Decode the JSON-string result returned by Browser Use page.evaluate()."""
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, (bytes, bytearray)):
+        result = result.decode("utf-8")
+    if isinstance(result, str):
+        try:
+            decoded = json.loads(result)
+        except json.JSONDecodeError as exc:
+            raise PrivacyBoundaryError("Browser returned invalid JSON from action execution") from exc
+        if isinstance(decoded, dict):
+            return decoded
+    raise PrivacyBoundaryError("Browser returned an invalid action execution result")
+
+
 async def execute_validated_action(page: Any, action: dict[str, Any]) -> None:
     """Execute a validated action directly on the live DOM and verify it."""
     if action["action"] == "noop":
@@ -188,8 +204,9 @@ async def execute_validated_action(page: Any, action: dict[str, Any]) -> None:
     result = page.evaluate(script)
     if inspect.isawaitable(result):
         result = await result
+    result = _decode_page_result(result)
 
-    if not isinstance(result, dict) or not result.get("found"):
+    if not result.get("found"):
         raise PrivacyBoundaryError(f"Validated target {target_id!r} was not found in the live DOM")
     if not result.get("button"):
         raise PrivacyBoundaryError(f"Validated target {target_id!r} is not a button in the live DOM")
