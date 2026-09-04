@@ -100,7 +100,7 @@ class SecureAgentTests(unittest.TestCase):
         self.assertEqual(_response_text(result), '{"action":"noop","target_id":null,"reason":"already complete"}')
 
     def test_secure_click_verifies_dom_post_condition(self) -> None:
-        page = _FakePage({"found": True, "button": True, "text": "Test order placed", "disabled": True})
+        page = _FakePage('{"found":true,"button":true,"text":"Test order placed","disabled":true}')
         action = {"action": "click", "target_id": "place-order"}
 
         asyncio.run(execute_validated_action(page, action))
@@ -110,7 +110,7 @@ class SecureAgentTests(unittest.TestCase):
         self.assertIn("el.click()", page.scripts[0])
 
     def test_secure_click_fails_closed_without_post_condition(self) -> None:
-        page = _FakePage({"found": True, "button": True, "text": "Place test order", "disabled": False})
+        page = _FakePage('{"found":true,"button":true,"text":"Place test order","disabled":false}')
         action = {"action": "click", "target_id": "place-order"}
 
         with self.assertRaises(PrivacyBoundaryError):
