@@ -77,7 +77,7 @@ def print_help() -> None:
     print()
     print(f"  {color('COMMANDS', BOLD)}")
     print(f"  {color('/demo', CYAN):<24} Open the controlled Ouroboros checkout page")
-    print(f"  {color('/live', CYAN):<24} Inspect and sanitize the current live browser page")
+    print(f"  {color('/live', CYAN):<24} Inspect and sanitize the tracked live browser page")
     print(f"  {color('/privacy', CYAN):<24} Scan the local demo HTML fixture")
     print(f"  {color('/help', CYAN):<24} Show available commands")
     print(f"  {color('/status', CYAN):<24} Show model and endpoint configuration")
@@ -146,24 +146,26 @@ def print_live_privacy(protected: dict) -> None:
     print()
 
 
-async def open_demo(browser_session: BrowserSession) -> None:
+async def open_demo(browser_session: BrowserSession):
     demo_url = os.getenv("OUROBOROS_DEMO_URL", "http://127.0.0.1:8000/demo/checkout.html")
     try:
         await browser_session.start()
-        await browser_session.new_page(demo_url)
+        page = await browser_session.new_page(demo_url)
         print(f"  {color('✓ DEMO OPENED', GREEN)}  {demo_url}")
         print()
+        return page
     except Exception as exc:
         print(f"  {color('✖ DEMO OPEN FAILED', RED)}")
         print(f"  {color(type(exc).__name__ + ':', DIM)} {exc}")
         print(f"  {color('TIP', YELLOW)} Start the demo server with: python -m http.server 8000")
         print()
+        return None
 
 
-async def inspect_live_page(browser_session: BrowserSession) -> None:
+async def inspect_live_page(browser_session: BrowserSession, page=None) -> None:
     started = time.perf_counter()
     try:
-        observation = await observe_current_page(browser_session)
+        observation = await observe_current_page(browser_session, page=page)
         protected = protect_live_observation(observation)
     except Exception as exc:
         print(f"\n  {color('✖ LIVE SCAN FAILED', RED)}")
@@ -249,6 +251,7 @@ async def cli() -> None:
     print_banner()
     llm = build_llm()
     browser_session = build_browser_session()
+    active_page = None
 
     try:
         while True:
@@ -276,10 +279,12 @@ async def cli() -> None:
                 print_privacy_demo()
                 continue
             if command == "/live":
-                await inspect_live_page(browser_session)
+                await inspect_live_page(browser_session, page=active_page)
                 continue
             if command == "/demo":
-                await open_demo(browser_session)
+                page = await open_demo(browser_session)
+                if page is not None:
+                    active_page = page
                 continue
             if command == "/clear":
                 os.system("cls" if os.name == "nt" else "clear")
