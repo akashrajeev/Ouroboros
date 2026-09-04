@@ -161,6 +161,12 @@ def print_model_handoff(result: dict) -> None:
     print_rule(width=64)
     print(f"  {color('BOUNDARY CHECK', DIM):<24} {color('PASS', GREEN)}")
     print(f"  {color('RAW PII IN PAYLOAD', DIM):<24} {result.get('model_input_raw_pii', 'UNKNOWN')}")
+    local_value_exposed = result.get("model_input_local_value_exposed")
+    stayed_local = result.get("local_value_stayed_local")
+    if local_value_exposed is not None:
+        print(f"  {color('LOCAL VALUE IN MODEL', DIM):<24} {color('YES', RED) if local_value_exposed else color('NO', GREEN)}")
+    if stayed_local is not None:
+        print(f"  {color('LOCAL VALUE STAYED LOCAL', DIM):<24} {color('YES', GREEN) if stayed_local else color('NO', RED)}")
     print(f"  {color('PAYLOAD SHA256', DIM):<24} {result.get('model_input_sha256', '')}")
     print()
     print(f"  {color('EXACT SAFE CONTENT SENT TO MODEL', DIM)}")
@@ -186,12 +192,17 @@ def print_secure_result(result: dict) -> None:
     print_rule(width=64)
     if action["action"] == "click":
         print(f"  click → {action['target_id']}")
+    elif action["action"] == "fill_local":
+        print(f"  fill_local → {action['target_id']}")
     else:
         print("  noop")
     if result.get("model_reason"):
         print(f"  {color('REASON', DIM)} {result['model_reason']}")
     print_rule(width=64)
-    print(f"  {color('✓ LOCAL EXECUTION', GREEN)} action applied to the live page")
+    if action["action"] == "fill_local":
+        print(f"  {color('✓ LOCAL EXECUTION', GREEN)} local value applied; value was not sent to model")
+    else:
+        print(f"  {color('✓ LOCAL EXECUTION', GREEN)} action applied to the live page")
     print()
 
 
