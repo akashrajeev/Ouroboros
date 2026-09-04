@@ -1,6 +1,7 @@
+import json
 import unittest
 
-from privacy.browser_observer import normalize_live_observation
+from privacy.browser_observer import _decode_evaluate_result, normalize_live_observation
 
 
 class BrowserObserverTests(unittest.TestCase):
@@ -60,6 +61,22 @@ class BrowserObserverTests(unittest.TestCase):
         self.assertFalse(element["visible"])
         self.assertFalse(element["enabled"])
         self.assertIsNone(state["screenshot"])
+
+    def test_decodes_browser_use_json_string_result(self) -> None:
+        payload = {
+            "url": "http://127.0.0.1:8000/demo/checkout.html",
+            "title": "Ouroboros — Checkout",
+            "viewport": {"width": 1280, "height": 720, "devicePixelRatio": 1},
+            "elements": [],
+        }
+
+        decoded = _decode_evaluate_result(json.dumps(payload))
+
+        self.assertEqual(decoded, payload)
+
+    def test_rejects_non_json_browser_result(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
+            _decode_evaluate_result("not-json")
 
 
 if __name__ == "__main__":
