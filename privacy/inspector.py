@@ -84,6 +84,7 @@ def inspect_html_file(path: str | Path) -> dict[str, Any]:
 
     detections: list[SensitiveDetection] = []
     elements: list[dict[str, Any]] = []
+    raw_sensitive_values: list[str] = []
 
     for field in parser.fields:
         field_detections = detect_field(
@@ -95,6 +96,10 @@ def inspect_html_file(path: str | Path) -> dict[str, Any]:
             label=field["label"],
         )
         detections.extend(field_detections)
+
+        if field_detections and field["value"]:
+            raw_sensitive_values.append(field["value"])
+
         elements.append(
             {
                 "id": field["id"],
@@ -110,17 +115,24 @@ def inspect_html_file(path: str | Path) -> dict[str, Any]:
     # Deduplicate multiple detector signals for the same field/class for demo metrics.
     unique_pairs = {(item.target_id, item.kind) for item in detections}
 
+    safe_state = {
+        "page": {"title": "Ouroboros Checkout Demo"},
+        "elements": elements,
+        "screenshot": None,
+    }
+
+    # Fail closed if an original detected value survives anywhere in the state.
+    serialized_safe_state = json.dumps(safe_state, ensure_ascii=False)
+    leaked_values = [value for value in raw_sensitive_values if value and value in serialized_safe_state]
+
     return {
         "source": str(html_path),
         "detectionCount": len(unique_pairs),
         "redactedCount": sum(1 for element in elements if element["redacted"]),
-        "leakageCheck": "PASS",
+        "leakageCheck": "PASS" if not leaked_values else "FAIL",
+        "leakedValueCount": len(leaked_values),
         "detections": [asdict(item) for item in detections],
-        "state": {
-            "page": {"title": "Ouroboros Checkout Demo"},
-            "elements": elements,
-            "screenshot": None,
-        },
+        "state": safe_state,
     }
 
 
@@ -144,7 +156,7 @@ def format_privacy_report(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "  " + "─" * 62,
-            "  RAW SENSITIVE VALUES IN SAFE STATE     0",
+            f"  RAW SENSITIVE VALUES IN SAFE STATE     {report.get('leakedValueCount', 0)}",
             "",
         ]
     )
