@@ -1,9 +1,8 @@
-"""Live browser observation for the Ouroboros privacy pipeline.
+"""Live browser observation and local privacy protection for Ouroboros.
 
-The observer runs inside the local browser session and returns a compact,
-structured representation of the current page. Raw field values are returned
-to the local process only; callers must sanitize the result before any network
-request.
+The observer runs against a local Browser Use page and returns a compact,
+structured representation of the current page. Raw field values stay in the
+local process; callers must sanitize the observation before any network request.
 """
 
 from __future__ import annotations
@@ -133,7 +132,7 @@ LIVE_DOM_SCRIPT = r"""() => {
 
 
 def normalize_live_observation(payload: dict[str, Any]) -> dict[str, Any]:
-    """Normalize the decoded browser payload into the shared state shape."""
+    """Normalize page.evaluate output into the shared browser-state shape."""
     elements = []
     for raw in payload.get("elements", []):
         elements.append(
@@ -166,7 +165,7 @@ def normalize_live_observation(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def protect_live_observation(observation: dict[str, Any]) -> dict[str, Any]:
-    """Detect and sanitize a live observation before it can leave the local process."""
+    """Detect and sanitize a live observation before it can leave the client."""
     elements = observation.get("elements", [])
     detections = []
     raw_sensitive_values: list[str] = []
@@ -204,16 +203,12 @@ def protect_live_observation(observation: dict[str, Any]) -> dict[str, Any]:
         "redactedCount": result.redacted_count,
         "leakageCheck": "PASS" if result.passed else "FAIL",
         "leakedValueCount": len(result.leaked_values),
+        "rawSensitiveValues": tuple(raw_sensitive_values),
     }
 
 
 def _decode_evaluate_result(result: Any) -> dict[str, Any]:
-    """Decode Browser Use page.evaluate output into a Python mapping.
-
-    Browser Use serializes JavaScript object results and returns them as JSON
-    strings. Accept a mapping too so the helper remains easy to unit-test and
-    tolerant of alternate browser adapters.
-    """
+    """Decode Browser Use page.evaluate output into a Python mapping."""
     if isinstance(result, dict):
         return result
 
@@ -232,13 +227,12 @@ def _decode_evaluate_result(result: Any) -> dict[str, Any]:
 
 
 async def observe_current_page(browser_session: Any, page: Any | None = None) -> dict[str, Any]:
-    """Observe an explicit live Page, falling back to the focused page."""
-    target_page = page
-    if target_page is None:
-        target_page = await browser_session.get_current_page()
-    if target_page is None:
+    """Observe an explicit Page, falling back to the session's focused page."""
+    if page is None:
+        page = await browser_session.get_current_page()
+    if page is None:
         raise RuntimeError("No active browser page is available")
 
-    raw_result = await target_page.evaluate(LIVE_DOM_SCRIPT)
+    raw_result = await page.evaluate(LIVE_DOM_SCRIPT)
     payload = _decode_evaluate_result(raw_result)
     return normalize_live_observation(payload)
