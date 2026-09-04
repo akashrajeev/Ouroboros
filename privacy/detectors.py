@@ -43,11 +43,21 @@ def classify_field(*, field_name: str, field_type: str, autocomplete: str, value
     if "email" in name or EMAIL_RE.search(value):
         matches.append(("EMAIL", 0.99, "email metadata or email pattern"))
 
-    if any(token in name for token in ("phone", "mobile", "tel")) or PHONE_RE.fullmatch(value.strip()):
+    # Card-like values are structurally more specific than phone numbers.
+    # Avoid treating a formatted 13-19 digit card number as a phone signal.
+    normalized = re.sub(r"[ -]", "", value)
+    card_like = (
+        "card" in name
+        or (normalized.isdigit() and 13 <= len(normalized) <= 19 and CARD_RE.fullmatch(value.strip()))
+    )
+
+    if not card_like and (
+        any(token in name for token in ("phone", "mobile", "tel"))
+        or PHONE_RE.fullmatch(value.strip())
+    ):
         matches.append(("PHONE", 0.98, "phone metadata or phone pattern"))
 
-    normalized = re.sub(r"[ -]", "", value)
-    if "card" in name or (normalized.isdigit() and 13 <= len(normalized) <= 19 and CARD_RE.fullmatch(value.strip())):
+    if card_like:
         matches.append(("CARD_NUMBER", 0.98, "card metadata or card-number pattern"))
 
     if "name" in name and value.strip():
