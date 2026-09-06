@@ -56,7 +56,7 @@ OUROBOROS_DEMO_URL=http://127.0.0.1:8000/demo/checkout.html
 
 `OPENCODE_ZEN_API_KEY` is the preferred credential variable. `OUROBOROS_API_KEY` and the previous `FREELLMAPI_API_KEY` name are still accepted for compatibility. Do not commit `.env` or real API keys.
 
-The default model is served by OpenCode Zen through its Responses API. The model is currently listed as free for a limited time, but OpenCode Zen still requires authentication/API-key access. citeturn705945search0turn705945search2
+The default model is served by OpenCode Zen through its Responses API. The model is currently listed as free for a limited time, but OpenCode Zen still requires authentication/API-key access.
 
 ## 5. Run and test Ouroboros
 
