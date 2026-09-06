@@ -8,10 +8,11 @@ from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from browser_use import Agent, ChatOpenAI
+from browser_use import Agent
 from browser_use.browser import BrowserProfile, BrowserSession
 from colorama import just_fix_windows_console
 
+from muse_spark import ChatMuseSpark, MUSE_SPARK_BASE_URL, MUSE_SPARK_MODEL
 from privacy.browser_observer import observe_current_page, protect_live_observation
 from privacy.inspector import format_privacy_report, inspect_html_file
 from privacy.secure_agent import PrivacyBoundaryError, run_privacy_task
@@ -58,12 +59,42 @@ def print_banner() -> None:
     print()
 
 
-def build_llm() -> ChatOpenAI:
-    return ChatOpenAI(
-        model=os.getenv("OUROBOROS_MODEL", "auto"),
-        base_url=os.getenv("OUROBOROS_BASE_URL", "http://127.0.0.1:31415/v1"),
-        api_key=os.getenv("FREELLMAPI_API_KEY"),
-        temperature=0.0,
+def _env_first(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
+def build_llm() -> ChatMuseSpark:
+    model = os.getenv("OUROBOROS_MODEL", MUSE_SPARK_MODEL)
+    base_url = os.getenv("OUROBOROS_BASE_URL", MUSE_SPARK_BASE_URL)
+    api_key = _env_first("OPENCODE_ZEN_API_KEY", "OUROBOROS_API_KEY", "FREELLMAPI_API_KEY")
+
+    if not api_key:
+        raise RuntimeError(
+            "Missing OpenCode Zen API key. Set OPENCODE_ZEN_API_KEY in .env "
+            "(the free Muse Spark model still requires Zen authentication)."
+        )
+
+    try:
+        max_output_tokens = int(os.getenv("OUROBOROS_MAX_OUTPUT_TOKENS", "16384"))
+    except ValueError as exc:
+        raise RuntimeError("OUROBOROS_MAX_OUTPUT_TOKENS must be an integer") from exc
+
+    reasoning_effort = os.getenv("OUROBOROS_REASONING_EFFORT", "high").lower()
+    if reasoning_effort not in {"minimal", "low", "medium", "high", "xhigh"}:
+        raise RuntimeError(
+            "OUROBOROS_REASONING_EFFORT must be one of minimal, low, medium, high, xhigh"
+        )
+
+    return ChatMuseSpark(
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        reasoning_effort=reasoning_effort,
+        max_completion_tokens=max_output_tokens,
     )
 
 
@@ -91,15 +122,19 @@ def print_help() -> None:
 
 
 def print_status() -> None:
-    model = os.getenv("OUROBOROS_MODEL", "auto")
-    base_url = os.getenv("OUROBOROS_BASE_URL", "http://127.0.0.1:31415/v1")
-    key_status = color("configured", GREEN) if os.getenv("FREELLMAPI_API_KEY") else color("not set", YELLOW)
+    model = os.getenv("OUROBOROS_MODEL", MUSE_SPARK_MODEL)
+    base_url = os.getenv("OUROBOROS_BASE_URL", MUSE_SPARK_BASE_URL)
+    api_key = _env_first("OPENCODE_ZEN_API_KEY", "OUROBOROS_API_KEY", "FREELLMAPI_API_KEY")
+    key_status = color("configured", GREEN) if api_key else color("not set", YELLOW)
+    reasoning_effort = os.getenv("OUROBOROS_REASONING_EFFORT", "high")
     print()
     print(f"  {color('SYSTEM STATUS', BOLD)}")
     print_rule(width=64)
     print(f"  {color('Model', DIM):<18} {model}")
     print(f"  {color('Endpoint', DIM):<18} {base_url}")
+    print(f"  {color('Reasoning', DIM):<18} {reasoning_effort}")
     print(f"  {color('API key', DIM):<18} {key_status}")
+    print(f"  {color('Transport', DIM):<18} OpenAI Responses API")
     print(f"  {color('Agent', DIM):<18} {color('ready', GREEN)}")
     print_rule(width=64)
     print()
@@ -239,7 +274,7 @@ async def inspect_live_page(browser_session: BrowserSession, page=None) -> None:
     print()
 
 
-async def run_secure_task(llm: ChatOpenAI, page, task: str) -> None:
+async def run_secure_task(llm: ChatMuseSpark, page, task: str) -> None:
     if page is None:
         print(f"  {color('✖ NO ACTIVE PAGE', RED)} Run /demo first.")
         print()
@@ -312,7 +347,7 @@ def print_task_header(task: str) -> None:
     print()
 
 
-async def run_task(llm: ChatOpenAI, browser_session: BrowserSession, task: str) -> None:
+async def run_task(llm: ChatMuseSpark, browser_session: BrowserSession, task: str) -> None:
     started = datetime.now()
     stop_event = asyncio.Event()
     spinner_task = asyncio.create_task(_status_spinner(stop_event))
